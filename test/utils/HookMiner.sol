@@ -4,19 +4,38 @@ pragma solidity 0.8.24;
 import {Hooks} from "v4-core/libraries/Hooks.sol";
 
 library HookMiner {
-    function findSalt(address deployer, uint160 flags, bytes memory creationCode, bytes memory params)
+    // keep right 14 bits
+    uint160 constant MASK = 0x3FFF;
+
+    function findSalt(address deployer, uint160 flags, bytes32 initCodeHash)
         external
-        pure
-        returns (address address_, bytes32 salt)
+        view
+        returns (address hookAddress, bytes32 salt)
     {
-        bytes32 creationHash = keccak256(abi.encodePacked(creationCode, params));
+        assembly {
+            // Preserve free memory pointer
+            let freeMemPtr := mload(0x40)
 
-        for (uint256 i = 0;; i++) {
-            address_ = address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xFF), deployer, i, creationHash)))));
+            // Setup memory
+            //0x00: 00 00 00 00 00 00 00 00 00 00 00 ff |-- address(this) -------------- |
+            //0x20: |------------------------ salt ------------------------------------- |
+            //0x40: |----------------- keccak256(initCode) ----------------------------- |
+            mstore(0x00, deployer)
+            mstore8(0x0b, 0xff)
+            mstore(0x20, salt)
+            mstore(0x40, initCodeHash)
 
-            if (uint160(address_) & Hooks.ALL_HOOK_MASK == flags) {
-                return (address_, bytes32(i));
+            let valid
+            for {} 0x01 {} {
+                hookAddress := keccak256(0x0b, 0x55)
+                valid := eq(and(hookAddress, MASK), flags)
+                if valid { break }
+                salt := gas()
+                mstore(0x20, salt)
             }
+
+            // Restore free memory pointer
+            mstore(0x40, freeMemPtr)
         }
     }
 }
